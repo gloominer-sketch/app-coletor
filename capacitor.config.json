@@ -1,0 +1,6 @@
+{
+  "appId": "com.valgroup.bipagem",
+  "appName": "Bipagem",
+  "webDir": "www",
+  "bundledWebRuntime": false
+}
