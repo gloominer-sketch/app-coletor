@@ -1,0 +1,9 @@
+{
+  "name": "Bipagem Offline",
+  "short_name": "Bipagem",
+  "start_url": "./",
+  "display": "standalone",
+  "background_color": "#001f3f",
+  "theme_color": "#001f3f",
+  "description": "App para registro de inventário offline"
+}

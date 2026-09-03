@@ -1,0 +1,719 @@
+<!DOCTYPE html>
+<html lang="pt-br">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+    <title>Bipagem Offline</title>
+    <!-- Link para o Manifest (PWA) -->
+    <link rel="manifest" href="manifest.json">
+    <style>
+        * { box-sizing: border-box; font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif; margin: 0; padding: 0; }
+        html, body { height: 100%; overflow: hidden; background-color: #f5f7fa; color: #1a1a1a; }
+        body { display: flex; flex-direction: column; }
+        
+        .header { background-color: #001f3f; color: white; padding: 10px; text-align: center; font-size: 15px; font-weight: bold; flex-shrink: 0; }
+        .container { flex: 1; display: flex; flex-direction: column; padding: 8px 12px; width: 100%; max-width: 600px; margin: 0 auto; overflow: hidden; }
+        .screen { display: none; flex: 1; flex-direction: column; overflow: hidden; }
+        .screen.active { display: flex; }
+        
+        #bloco-ucs { display: none; flex-direction: column; flex: 1; overflow: hidden; }
+        #bloco-ucs.active-flex { display: flex; }
+        
+        .form-group { margin-bottom: 6px; flex-shrink: 0; }
+        label { display: block; font-size: 13px; font-weight: 600; margin-bottom: 4px; color: #333; }
+        input { width: 100%; padding: 8px 12px; font-size: 14px; border: 2px solid #ccc; border-radius: 8px; background-color: #fff; }
+        input:focus { border-color: #0078D4; outline: none; }
+        
+        .input-with-counter { position: relative; }
+        .input-with-counter input { padding-right: 50px; }
+        .character-counter { position: absolute; right: 10px; bottom: 8px; color: #666; font-size: 11px; pointer-events: none; }
+        
+        button { width: 100%; padding: 10px; font-size: 14px; font-weight: bold; color: white; background-color: #0078D4; border: none; border-radius: 8px; cursor: pointer; flex-shrink: 0; }
+        button:active { background-color: #005a9e; }
+        .btn-secondary { background-color: #e3e7ec; color: #333; margin-top: 6px; }
+        .btn-danger { background-color: #c62828; margin-top: 6px; margin-bottom: 4px; }
+        
+        .active-position { background-color: #eef6ff; border-left: 4px solid #0078D4; padding: 6px 10px; border-radius: 4px; margin-bottom: 6px; font-size: 14px; font-weight: bold; flex-shrink: 0; }
+        
+        .list-container { flex: 1 1 auto; overflow-y: auto; background: #fff; border-radius: 8px; border: 1px solid #e3e7ec; margin-top: 4px; margin-bottom: 4px; min-height: 0; }
+        .list-item { display: flex; padding: 8px 12px; border-bottom: 1px solid #eee; font-size: 13px; }
+        .list-item:last-child { border-bottom: none; }
+        .list-item .seq { font-weight: bold; color: #0078D4; width: 30px; }
+        .list-item .uc { flex: 1; font-weight: 600; }
+        
+        .flash-success { animation: flashGreen 0.5s ease-out; }
+        .modal-backdrop { display: none; position: fixed; inset: 0; align-items: center; justify-content: center; padding: 16px; background: rgba(0, 0, 0, 0.45); z-index: 10; }
+        .modal-backdrop.active { display: flex; }
+        .modal { width: 100%; max-width: 320px; padding: 20px; background: #fff; border-radius: 8px; text-align: center; box-shadow: 0 8px 24px rgba(0, 0, 0, 0.25); }
+        .modal h2 { margin-bottom: 10px; font-size: 18px; }
+        .modal p { margin-bottom: 16px; line-height: 1.4; font-size: 14px; }
+        .modal .btn-secondary { margin-top: 8px; }
+        @keyframes flashGreen { 0% { box-shadow: 0 0 0 0 rgba(40, 167, 69, 0.7); } 70% { box-shadow: 0 0 0 10px rgba(40, 167, 69, 0); } 100% { box-shadow: 0 0 0 0 rgba(40, 167, 69, 0); } }
+    </style>
+</head>
+<body>
+
+    <div class="header">Contagem de Inventário</div>
+
+    <!-- TELA DE LOGIN -->
+    <div id="screen-login" class="container screen active">
+        <div class="form-group">
+            <label>Nº do Documento</label>
+            <input type="text" id="login-documento" placeholder="Ex: 20260329">
+        </div>
+        <div class="form-group">
+            <label>Matrícula</label>
+            <input type="text" id="login-matricula" placeholder="Digite sua matrícula">
+        </div>
+        <div class="form-group">
+            <label>Nome do Operador</label>
+            <input type="text" id="login-nome" placeholder="Digite seu nome">
+        </div>
+        <button onclick="entrarNaContagem()">Entrar na Contagem</button>
+        <button id="btn-cadastrar-login" class="btn-secondary" onclick="registrarUsuario()" style="display: none;">Cadastrar Usuário</button>
+        <button class="btn-secondary" onclick="sincronizarComServidor()">Sincronizar Dados</button>
+    </div>
+
+    <!-- TELA DE CONTAGEM -->
+    <div id="screen-contagem" class="container screen">
+        
+        <div id="bloco-posicao" style="display: block;">
+            <div class="form-group">
+                <label>Bipar ou Digitar Posição</label>
+                <input type="text" id="input-posicao" placeholder="Ex: A01-01-01" onkeydown="detectarBipagemPosicao(event)">
+            </div>
+            <button onclick="confirmarPosicao()">Confirmar Posição</button>
+            <button class="btn-danger" onclick="encerrarContagem()" style="margin-top: 20px;">ENCERRAR CONTAGEM</button>
+        </div>
+
+        <div id="bloco-ucs">
+            <div class="active-position" id="display-posicao">
+                Posição Ativa: <span></span>
+            </div>
+            
+            <div class="form-group">
+                <label>Bipar UC</label>
+                <div class="input-with-counter">
+                    <input type="text" id="input-uc" placeholder="Aguardando bipagem..." maxlength="18" inputmode="numeric" onkeydown="detectarBipagemUC(event)" oninput="manterSomenteNumerosUC()">
+                    <span class="character-counter" id="contador-uc">0/18</span>
+                </div>
+            </div>
+            <button onclick="biparUC()" id="btn-bipar">Registrar UC</button>
+
+            <div class="list-container" id="lista-ucs"></div>
+
+            <button class="btn-secondary" onclick="proximaPosicao()">PRÓXIMA POSIÇÃO</button>
+        </div>
+
+    </div>
+
+    <!-- MODAL DE ALERTA GERAL -->
+    <div id="modal-alerta" class="modal-backdrop" role="dialog" aria-modal="true">
+        <div class="modal">
+            <h2 id="titulo-alerta">Atenção</h2>
+            <p id="mensagem-alerta" style="white-space: pre-wrap;"></p>
+            <button onclick="fecharAlerta()">OK</button>
+        </div>
+    </div>
+
+    <!-- OUTROS MODAIS -->
+    <div id="modal-duplicada" class="modal-backdrop" role="dialog" aria-modal="true" aria-labelledby="titulo-duplicada">
+        <div class="modal">
+            <h2 id="titulo-duplicada">UC duplicada</h2>
+            <p>Esta UC já foi registrada nesta posição. Deseja continuar?</p>
+            <button onclick="continuarRegistroUC()">Continuar</button>
+            <button class="btn-secondary" onclick="cancelarRegistroUC()">Cancelar</button>
+        </div>
+    </div>
+
+    <div id="modal-uc-inexistente" class="modal-backdrop" role="dialog" aria-modal="true" aria-labelledby="titulo-uc-inexistente">
+        <div class="modal" style="max-width: 420px; text-align: left;">
+            <h2 id="titulo-uc-inexistente" style="text-align: center;">UC não existe no sistema</h2>
+            <p style="text-align: center;">Esta UC não foi encontrada na base cadastrada.</p>
+            <div class="form-group" style="margin-top: 12px;">
+                <label for="campo-material">Material</label>
+                <input type="text" id="campo-material" placeholder="Digite o material">
+            </div>
+            <div class="form-group">
+                <label for="campo-peso">Peso líquido</label>
+                <input type="number" step="0.01" min="0" id="campo-peso" placeholder="0,00">
+            </div>
+            <button onclick="confirmarUcInexistente()">Confirmar</button>
+            <button class="btn-secondary" onclick="cancelarCadastroUcInexistente()">Cancelar</button>
+        </div>
+    </div>
+
+    <script>
+        let alertaCallback = null;
+
+        function mostrarAlerta(titulo, mensagem, callback = null) {
+            const tituloEl = document.getElementById('titulo-alerta');
+            tituloEl.innerText = titulo;
+            document.getElementById('mensagem-alerta').innerText = mensagem;
+            
+            if (titulo.toLowerCase().includes("erro") || titulo.toLowerCase().includes("bloqueada")) {
+                tituloEl.style.color = "#c62828"; 
+            } else if (titulo.toLowerCase().includes("sucesso")) {
+                tituloEl.style.color = "#28a745";
+            } else {
+                tituloEl.style.color = "#333";
+            }
+
+            document.getElementById('modal-alerta').classList.add('active');
+            alertaCallback = callback;
+        }
+
+        function fecharAlerta() {
+            document.getElementById('modal-alerta').classList.remove('active');
+            if (alertaCallback) {
+                alertaCallback();
+                alertaCallback = null;
+            }
+        }
+
+        async function fetchJson(url, options = {}) {
+            const response = await fetch(url, options);
+            if (!response.ok) {
+                const errData = await response.json().catch(() => ({}));
+                throw new Error(errData.erro || 'Erro na requisição ao servidor.');
+            }
+            return response.json();
+        }
+
+        let db;
+        const requestDB = indexedDB.open("BipagemOfflineDB", 2);
+
+        requestDB.onupgradeneeded = function(event) {
+            db = event.target.result;
+            if (!db.objectStoreNames.contains('leituras')) {
+                db.createObjectStore('leituras', { keyPath: 'id', autoIncrement: true });
+            }
+            if (!db.objectStoreNames.contains('ucs_locais')) {
+                db.createObjectStore('ucs_locais', { keyPath: 'uc' });
+            }
+        };
+
+        requestDB.onsuccess = function(event) {
+            db = event.target.result;
+            carregarFilaMemoria(); 
+        };
+
+        requestDB.onerror = function(event) {
+            console.error("Erro ao abrir IndexedDB:", event.target.errorCode);
+        };
+
+        if ('serviceWorker' in navigator) {
+            window.addEventListener('load', () => {
+                navigator.serviceWorker.register('sw.js').then((registration) => {
+                    console.log('Service Worker registrado com sucesso:', registration);
+                }).catch((error) => {
+                    console.log('Falha ao registrar o Service Worker:', error);
+                });
+            });
+        }
+
+        const API_BASE = 'https://backend-inventario-qgfq.onrender.com';
+
+        let operadorLogado = {};
+        let documentoAtivo = "";
+        let posicoesAutorizadas = [];
+        let posicaoAtiva = "";
+        let seqAtual = 0;
+        let contagensOffline = []; 
+        let timerBipagemUC;
+        let ultimaTeclaUC = 0;
+        let teclasRapidasUC = 0;
+        let timerBipagemPosicao;
+        let ultimaTeclaPosicao = 0;
+        let teclasRapidasPosicao = 0;
+        let ucPendente;
+        let ucEmCadastro = null;
+        let sincronizacaoEmAndamento = false;
+
+        function carregarFilaMemoria() {
+            const transaction = db.transaction(['leituras'], 'readonly');
+            const store = transaction.objectStore('leituras');
+            const request = store.getAll();
+
+            request.onsuccess = function(event) {
+                contagensOffline = event.target.result;
+            };
+        }
+
+        function mostrarBotaoCadastro(mostrar) {
+            const botao = document.getElementById('btn-cadastrar-login');
+            botao.style.display = mostrar ? 'block' : 'none';
+        }
+
+        function registrarUsuario() {
+            const matricula = document.getElementById('login-matricula').value.trim();
+            const nome = document.getElementById('login-nome').value.trim();
+
+            if(!matricula || !nome) {
+                mostrarAlerta("Atenção", "Preencha matrícula e nome para cadastrar.");
+                return;
+            }
+
+            fetch(`${API_BASE}/usuarios/registrar`, {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ matricula, nome })
+            })
+            .then(response => response.json().then(data => ({ status: response.status, data })))
+            .then(({ status, data }) => {
+                if (status >= 400) {
+                    throw new Error(data.erro || 'Não foi possível cadastrar o usuário.');
+                }
+                mostrarAlerta("Sucesso", data.mensagem || 'Usuário cadastrado com sucesso!');
+                mostrarBotaoCadastro(false);
+                document.getElementById('login-nome').value = nome;
+            })
+            .catch(error => {
+                mostrarAlerta("Erro", error.message || 'Erro ao cadastrar usuário.');
+            });
+        }
+
+        function entrarNaContagem() {
+            const matricula = document.getElementById('login-matricula').value.trim();
+            const nome = document.getElementById('login-nome').value.trim();
+            const documento = document.getElementById('login-documento').value.trim();
+
+            if(!matricula || !nome || !documento) {
+                mostrarAlerta("Atenção", "Preencha o documento, a matrícula e o nome!");
+                return;
+            }
+
+            fetchJson(`${API_BASE}/documentos/validar/${encodeURIComponent(documento)}`)
+                .then(resultado => {
+                    if (resultado.existe) {
+                        posicoesAutorizadas = resultado.posicoes.map(p => p.toUpperCase());
+                        documentoAtivo = documento;
+                        
+                        return fetchJson(`${API_BASE}/login`, {
+                            method: 'POST',
+                            headers: { 'Content-Type': 'application/json' },
+                            body: JSON.stringify({ matricula, nome })
+                        });
+                    } else {
+                        throw new Error("Documento de inventário não encontrado.");
+                    }
+                })
+                .then(data => {
+                    mostrarBotaoCadastro(false);
+                    const nomeDoUsuario = data.nome || nome;
+                    operadorLogado = { matricula, nome: nomeDoUsuario };
+                    
+                    // Baixa a base de UCs para o cache do IndexedDB no coletor em segundo plano
+                    if (navigator.onLine) {
+                        fetchJson(`${API_BASE}/ucs`)
+                            .then(res => {
+                                if (res && res.ucs && db) {
+                                    const tx = db.transaction(['ucs_locais'], 'readwrite');
+                                    const store = tx.objectStore('ucs_locais');
+                                    res.ucs.forEach(item => {
+                                        store.put({ uc: item.uc, material: item.material || '', peso_liquido: item.peso_liquido || 0 });
+                                    });
+                                }
+                            }).catch(e => console.log("Aviso ao baixar UCs locais:", e));
+                    }
+                    
+                    document.getElementById('screen-login').classList.remove('active');
+                    document.getElementById('screen-contagem').classList.add('active');
+                    
+                    mostrarAlerta("Sucesso", `Documento validado! ${posicoesAutorizadas.length} posições liberadas para contagem.`, () => {
+                        document.getElementById('input-posicao').focus();
+                    });
+                })
+                .catch(error => {
+                    mostrarAlerta("Erro", error.message || 'Erro ao tentar entrar. Verifique os dados ou a conexão.');
+                });
+        }
+
+        function confirmarPosicao() {
+            const pos = document.getElementById('input-posicao').value.toUpperCase().trim();
+            if(!pos) return;
+
+            if (posicoesAutorizadas.length > 0 && !posicoesAutorizadas.includes(pos)) {
+                mostrarAlerta("Posição Bloqueada!", `A posição "${pos}" não faz parte do documento de inventário ativo (${documentoAtivo}).`, () => {
+                    document.getElementById('input-posicao').value = "";
+                    document.getElementById('input-posicao').focus();
+                });
+                return;
+            }
+
+            posicaoAtiva = pos;
+            
+            const ucsDestaPosicao = contagensOffline.filter(r => r.posicao === posicaoAtiva);
+            seqAtual = ucsDestaPosicao.length > 0 ? Math.max(...ucsDestaPosicao.map(r => r.seq)) : 0;
+            
+            document.querySelector('#display-posicao span').innerText = posicaoAtiva;
+            document.getElementById('bloco-posicao').style.display = 'none';
+            
+            const blocoUcs = document.getElementById('bloco-ucs');
+            blocoUcs.classList.add('active-flex');
+            
+            document.getElementById('lista-ucs').innerHTML = ""; 
+            
+            ucsDestaPosicao.sort((a,b) => b.seq - a.seq).forEach(registro => {
+                atualizarListaVisual(registro);
+            });
+            
+            const inputUc = document.getElementById('input-uc');
+            inputUc.value = "";
+            atualizarContadorUC();
+
+            if (navigator.onLine && contagensOffline.some(registro => registro.status === "Pendente")) {
+                sincronizarComServidor(true);
+            }
+
+            inputUc.focus();
+        }
+
+        function detectarBipagemPosicao(event) {
+            if (event.key === "Enter") {
+                clearTimeout(timerBipagemPosicao);
+                confirmarPosicao();
+                return;
+            }
+            const agora = performance.now();
+            teclasRapidasPosicao = agora - ultimaTeclaPosicao <= 100 ? teclasRapidasPosicao + 1 : 1;
+            ultimaTeclaPosicao = agora;
+            if (teclasRapidasPosicao >= 4) {
+                clearTimeout(timerBipagemPosicao);
+                timerBipagemPosicao = setTimeout(confirmarPosicao, 250);
+            }
+        }
+
+        function detectarBipagemUC(event) {
+            if (event.key === "Enter") {
+                clearTimeout(timerBipagemUC);
+                biparUC();
+                return;
+            }
+            if (event.key.length === 1 && !/[0-9]/.test(event.key)) {
+                event.preventDefault();
+                return;
+            }
+            const agora = performance.now();
+            teclasRapidasUC = agora - ultimaTeclaUC <= 100 ? teclasRapidasUC + 1 : 1;
+            ultimaTeclaUC = agora;
+            if (teclasRapidasUC >= 4) {
+                agendarBipagemUC();
+            }
+        }
+
+        function agendarBipagemUC() {
+            clearTimeout(timerBipagemUC);
+            timerBipagemUC = setTimeout(() => {
+                biparUC();
+            }, 250);
+        }
+
+        function manterSomenteNumerosUC() {
+            const inputUc = document.getElementById('input-uc');
+            inputUc.value = inputUc.value.replace(/\D/g, '').slice(0, 18);
+            atualizarContadorUC();
+        }
+
+        function atualizarContadorUC() {
+            const inputUc = document.getElementById('input-uc');
+            document.getElementById('contador-uc').innerText = `${inputUc.value.length}/18`;
+        }
+
+        function biparUC() {
+            const inputUc = document.getElementById('input-uc');
+            const ucVal = inputUc.value.trim();
+
+            clearTimeout(timerBipagemUC);
+            timerBipagemUC = null;
+            
+            if(!ucVal) return;
+            if (ucVal.length > 18) {
+                mostrarAlerta("Atenção", "A UC não pode conter mais de 18 números.", () => { inputUc.focus(); });
+                return;
+            }
+
+            if (contagensOffline.some(registro => registro.posicao === posicaoAtiva && registro.uc === ucVal)) {
+                ucPendente = ucVal;
+                document.getElementById('modal-duplicada').classList.add('active');
+                return;
+            }
+
+            validarUcNoSistema(ucVal);
+        }
+
+        function validarUcNoSistema(ucVal) {
+            if (!db) {
+                // Fallback se o DB não abriu por algum motivo, tenta direto via fetch
+                validarUcServidor(ucVal);
+                return;
+            }
+
+            const transaction = db.transaction(['ucs_locais'], 'readonly');
+            const store = transaction.objectStore('ucs_locais');
+            const request = store.get(ucVal);
+
+            request.onsuccess = function(event) {
+                const registroLocal = event.target.result;
+
+                if (registroLocal) {
+                    // Achou na memória local do coletor!
+                    registrarUC(ucVal, { material: registroLocal.material, peso_liquido: registroLocal.peso_liquido });
+                } else if (navigator.onLine) {
+                    // Não achou local, mas tem internet: valida no servidor
+                    validarUcServidor(ucVal);
+                } else {
+                    // Sem internet e não está na base local baixada
+                    mostrarAlerta("UC Não Encontrada", "Esta UC não consta na base baixada para o modo offline.", () => {
+                        document.getElementById('input-uc').value = "";
+                        document.getElementById('input-uc').focus();
+                    });
+                }
+            };
+
+            request.onerror = function() {
+                validarUcServidor(ucVal);
+            };
+        }
+
+        function validarUcServidor(ucVal) {
+            fetchJson(`${API_BASE}/ucs/validar/${encodeURIComponent(ucVal)}`)
+                .then(resultado => {
+                    if (resultado.existe) {
+                        registrarUC(ucVal, { material: resultado.material, peso_liquido: resultado.peso_liquido });
+                        return;
+                    }
+
+                    ucEmCadastro = ucVal;
+                    document.getElementById('campo-material').value = '';
+                    document.getElementById('campo-peso').value = '';
+                    document.getElementById('modal-uc-inexistente').classList.add('active');
+                    document.getElementById('campo-material').focus();
+                })
+                .catch(() => {
+                    mostrarAlerta("Erro", "Não foi possível validar a UC no sistema. Verifique a conexão com o painel.");
+                });
+        }
+
+        function cancelarCadastroUcInexistente() {
+            ucEmCadastro = null;
+            document.getElementById('modal-uc-inexistente').classList.remove('active');
+            document.getElementById('input-uc').value = '';
+            atualizarContadorUC();
+            document.getElementById('input-uc').focus();
+        }
+
+        function confirmarUcInexistente() {
+            const material = document.getElementById('campo-material').value.trim();
+            const peso = document.getElementById('campo-peso').value.trim();
+
+            if (!material) {
+                mostrarAlerta("Atenção", "Informe o material antes de confirmar.", () => { document.getElementById('campo-material').focus(); });
+                return;
+            }
+            if (!peso || Number(peso) < 0) {
+                mostrarAlerta("Atenção", "Informe o peso líquido válido antes de confirmar.", () => { document.getElementById('campo-peso').focus(); });
+                return;
+            }
+
+            fetchJson(`${API_BASE}/ucs/registrar`, {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({
+                    uc: ucEmCadastro,
+                    material,
+                    peso_liquido: Number(peso)
+                })
+            })
+            .then(() => {
+                // Salva também no cache local do coletor para futuras leituras offline
+                if (db) {
+                    const tx = db.transaction(['ucs_locais'], 'readwrite');
+                    tx.objectStore('ucs_locais').put({ uc: ucEmCadastro, material, peso_liquido: Number(peso) });
+                }
+
+                document.getElementById('modal-uc-inexistente').classList.remove('active');
+                registrarUC(ucEmCadastro, { material, peso_liquido: Number(peso) });
+            })
+            .catch(() => {
+                mostrarAlerta("Erro", "Não foi possível salvar a UC no sistema. Tente novamente.");
+            });
+        }
+
+        function continuarRegistroUC() {
+            if (ucPendente) {
+                registrarUC(ucPendente);
+            }
+            fecharModalDuplicada();
+        }
+
+        function cancelarRegistroUC() {
+            fecharModalDuplicada();
+            document.getElementById('input-uc').value = "";
+            document.getElementById('input-uc').focus();
+        }
+
+        function fecharModalDuplicada() {
+            document.getElementById('modal-duplicada').classList.remove('active');
+            ucPendente = null;
+        }
+
+        function registrarUC(ucVal, dadosExtras = {}) {
+            const inputUc = document.getElementById('input-uc');
+            seqAtual++; 
+
+            const registro = {
+                operador: operadorLogado.matricula,
+                nome: operadorLogado.nome,
+                posicao: posicaoAtiva,
+                uc: ucVal,
+                seq: seqAtual,
+                dataHora: new Date().toISOString(),
+                status: "Pendente",
+                material: dadosExtras.material || '',
+                peso_liquido: dadosExtras.peso_liquido ?? 0
+            };
+
+            const transaction = db.transaction(['leituras'], 'readwrite');
+            const store = transaction.objectStore('leituras');
+            store.add(registro);
+
+            contagensOffline.push(registro);
+            atualizarListaVisual(registro);
+
+            inputUc.classList.add('flash-success');
+            setTimeout(() => inputUc.classList.remove('flash-success'), 500);
+
+            ucEmCadastro = null;
+            inputUc.value = "";
+            atualizarContadorUC();
+            teclasRapidasUC = 0;
+            inputUc.focus();
+        }
+
+        function atualizarListaVisual(registro) {
+            const lista = document.getElementById('lista-ucs');
+            const item = document.createElement('div');
+            item.className = 'list-item';
+            item.innerHTML = `
+                <div class="seq">${registro.seq}</div>
+                <div class="uc">${registro.uc}</div>
+            `;
+            lista.prepend(item); 
+        }
+
+        function proximaPosicao() {
+            if (navigator.onLine && contagensOffline.some(registro => registro.status === "Pendente")) {
+                sincronizarComServidor(true);
+            }
+
+            posicaoAtiva = "";
+            
+            document.getElementById('bloco-ucs').classList.remove('active-flex');
+            document.getElementById('bloco-posicao').style.display = 'block';
+            
+            const inputPos = document.getElementById('input-posicao');
+            inputPos.value = "";
+            inputPos.focus();
+        }
+
+        function encerrarContagem() {
+            clearTimeout(timerBipagemUC);
+            clearTimeout(timerBipagemPosicao);
+            fecharModalDuplicada();
+
+            operadorLogado = {};
+            posicaoAtiva = "";
+            documentoAtivo = ""; 
+            posicoesAutorizadas = []; 
+            seqAtual = 0;
+            teclasRapidasUC = 0;
+            teclasRapidasPosicao = 0;
+            ultimaTeclaUC = 0;
+            ultimaTeclaPosicao = 0;
+
+            document.getElementById('bloco-ucs').classList.remove('active-flex');
+            document.getElementById('bloco-posicao').style.display = 'block';
+            document.getElementById('input-posicao').value = "";
+            document.getElementById('input-uc').value = "";
+            atualizarContadorUC();
+            document.getElementById('lista-ucs').innerHTML = "";
+            document.querySelector('#display-posicao span').innerText = "";
+
+            document.getElementById('screen-contagem').classList.remove('active');
+            document.getElementById('screen-login').classList.add('active');
+            document.getElementById('login-documento').value = ""; 
+            document.getElementById('login-matricula').value = "";
+            document.getElementById('login-nome').value = "";
+            document.getElementById('login-documento').focus();
+        }
+
+        function sincronizarComServidor(silencioso = false) {
+            const transaction = db.transaction(['leituras'], 'readonly');
+            const store = transaction.objectStore('leituras');
+            const request = store.getAll();
+
+            request.onsuccess = function(event) {
+                const dadosPendentes = event.target.result.filter(registro => registro.status === "Pendente");
+
+                if (dadosPendentes.length === 0) {
+                    if (!silencioso) {
+                        mostrarAlerta("Atenção", "Não há dados locais pendentes para enviar.");
+                    }
+                    return;
+                }
+
+                fetch(`${API_BASE}/sincronizar`, {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify(dadosPendentes)
+                })
+                .then(async response => {
+                    if (!response.ok) {
+                        const err = await response.json().catch(() => ({}));
+                        throw new Error(err.erro || "Falha " + response.status);
+                    }
+                    return response.json();
+                })
+                .then(data => {
+                    if (!silencioso) {
+                        mostrarAlerta("Sucesso", `Sincronização concluída! ${data.inseridos} registros descarregados.`);
+                    }
+                    marcarComoSincronizado(dadosPendentes);
+                })
+                .catch(error => {
+                    if (!silencioso) {
+                        mostrarAlerta("Erro", "Ocorreu um bloqueio ao enviar para o Python: " + error.message);
+                    }
+                    console.error(error);
+                });
+            };
+        }
+
+        function marcarComoSincronizado(dadosEnviados) {
+            const transaction = db.transaction(['leituras'], 'readwrite');
+            const store = transaction.objectStore('leituras');
+
+            dadosEnviados.forEach(item => {
+                item.status = "Sincronizado";
+                store.put(item);
+            });
+
+            contagensOffline.forEach(item => {
+                if (item.status === "Pendente") item.status = "Sincronizado";
+            });
+        }
+
+        window.addEventListener('online', () => {
+            console.log("Conexão de rede restabelecida! Tentando sincronizar automaticamente...");
+            sincronizarComServidor(true);
+        });
+
+        window.addEventListener('load', () => {
+            if (navigator.onLine) {
+                sincronizarComServidor(true);
+            }
+        });
+    </script>
+</body>
+</html>
