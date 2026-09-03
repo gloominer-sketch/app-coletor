@@ -228,7 +228,6 @@
         let teclasRapidasPosicao = 0;
         let ucPendente;
         let ucEmCadastro = null;
-        let sincronizacaoEmAndamento = false;
 
         function carregarFilaMemoria() {
             const transaction = db.transaction(['leituras'], 'readonly');
@@ -303,7 +302,6 @@
                     const nomeDoUsuario = data.nome || nome;
                     operadorLogado = { matricula, nome: nomeDoUsuario };
                     
-                    // Baixa a base de UCs para o cache do IndexedDB no coletor em segundo plano
                     if (navigator.onLine) {
                         fetchJson(`${API_BASE}/ucs`)
                             .then(res => {
@@ -444,8 +442,7 @@
 
         function validarUcNoSistema(ucVal) {
             if (!db) {
-                // Fallback se o DB não abriu por algum motivo, tenta direto via fetch
-                validarUcServidor(ucVal);
+                mostrarAlerta("Erro", "Banco de dados offline não iniciado. Feche e abra o aplicativo.");
                 return;
             }
 
@@ -457,42 +454,19 @@
                 const registroLocal = event.target.result;
 
                 if (registroLocal) {
-                    // Achou na memória local do coletor!
                     registrarUC(ucVal, { material: registroLocal.material, peso_liquido: registroLocal.peso_liquido });
-                } else if (navigator.onLine) {
-                    // Não achou local, mas tem internet: valida no servidor
-                    validarUcServidor(ucVal);
                 } else {
-                    // Sem internet e não está na base local baixada
-                    mostrarAlerta("UC Não Encontrada", "Esta UC não consta na base baixada para o modo offline.", () => {
-                        document.getElementById('input-uc').value = "";
-                        document.getElementById('input-uc').focus();
-                    });
-                }
-            };
-
-            request.onerror = function() {
-                validarUcServidor(ucVal);
-            };
-        }
-
-        function validarUcServidor(ucVal) {
-            fetchJson(`${API_BASE}/ucs/validar/${encodeURIComponent(ucVal)}`)
-                .then(resultado => {
-                    if (resultado.existe) {
-                        registrarUC(ucVal, { material: resultado.material, peso_liquido: resultado.peso_liquido });
-                        return;
-                    }
-
                     ucEmCadastro = ucVal;
                     document.getElementById('campo-material').value = '';
                     document.getElementById('campo-peso').value = '';
                     document.getElementById('modal-uc-inexistente').classList.add('active');
                     document.getElementById('campo-material').focus();
-                })
-                .catch(() => {
-                    mostrarAlerta("Erro", "Não foi possível validar a UC no sistema. Verifique a conexão com o painel.");
-                });
+                }
+            };
+
+            request.onerror = function() {
+                mostrarAlerta("Erro", "Falha ao consultar a base de dados do celular.");
+            };
         }
 
         function cancelarCadastroUcInexistente() {
@@ -516,28 +490,14 @@
                 return;
             }
 
-            fetchJson(`${API_BASE}/ucs/registrar`, {
-                method: 'POST',
-                headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify({
-                    uc: ucEmCadastro,
-                    material,
-                    peso_liquido: Number(peso)
-                })
-            })
-            .then(() => {
-                // Salva também no cache local do coletor para futuras leituras offline
-                if (db) {
-                    const tx = db.transaction(['ucs_locais'], 'readwrite');
-                    tx.objectStore('ucs_locais').put({ uc: ucEmCadastro, material, peso_liquido: Number(peso) });
-                }
+            if (db) {
+                const tx = db.transaction(['ucs_locais'], 'readwrite');
+                // Marcamos com flag novaUC = true para o sistema saber que precisa enviar esse cadastro ao servidor depois
+                tx.objectStore('ucs_locais').put({ uc: ucEmCadastro, material, peso_liquido: Number(peso), novaUC: true });
+            }
 
-                document.getElementById('modal-uc-inexistente').classList.remove('active');
-                registrarUC(ucEmCadastro, { material, peso_liquido: Number(peso) });
-            })
-            .catch(() => {
-                mostrarAlerta("Erro", "Não foi possível salvar a UC no sistema. Tente novamente.");
-            });
+            document.getElementById('modal-uc-inexistente').classList.remove('active');
+            registrarUC(ucEmCadastro, { material, peso_liquido: Number(peso) });
         }
 
         function continuarRegistroUC() {
@@ -649,44 +609,81 @@
         }
 
         function sincronizarComServidor(silencioso = false) {
-            const transaction = db.transaction(['leituras'], 'readonly');
-            const store = transaction.objectStore('leituras');
-            const request = store.getAll();
+            const transaction = db.transaction(['leituras', 'ucs_locais'], 'readonly');
+            
+            // Busca UCs novas cadastradas offline
+            const storeUcs = transaction.objectStore('ucs_locais');
+            const reqUcs = storeUcs.getAll();
 
-            request.onsuccess = function(event) {
-                const dadosPendentes = event.target.result.filter(registro => registro.status === "Pendente");
+            reqUcs.onsuccess = function(eUcs) {
+                const ucsNovasLocais = eUcs.target.result.filter(u => u.novaUC === true);
 
-                if (dadosPendentes.length === 0) {
-                    if (!silencioso) {
-                        mostrarAlerta("Atenção", "Não há dados locais pendentes para enviar.");
-                    }
-                    return;
-                }
+                // Busca leituras pendentes
+                const storeLeituras = transaction.objectStore('leituras');
+                const reqLeituras = storeLeituras.getAll();
 
-                fetch(`${API_BASE}/sincronizar`, {
-                    method: 'POST',
-                    headers: { 'Content-Type': 'application/json' },
-                    body: JSON.stringify(dadosPendentes)
-                })
-                .then(async response => {
-                    if (!response.ok) {
-                        const err = await response.json().catch(() => ({}));
-                        throw new Error(err.erro || "Falha " + response.status);
+                reqLeituras.onsuccess = function(eLeituras) {
+                    const dadosPendentes = eLeituras.target.result.filter(registro => registro.status === "Pendente");
+
+                    if (dadosPendentes.length === 0 && ucsNovasLocais.length === 0) {
+                        if (!silencioso) {
+                            mostrarAlerta("Atenção", "Não há dados locais pendentes para enviar.");
+                        }
+                        return;
                     }
-                    return response.json();
-                })
-                .then(data => {
-                    if (!silencioso) {
-                        mostrarAlerta("Sucesso", `Sincronização concluída! ${data.inseridos} registros descarregados.`);
+
+                    // Se houver UCs novas criadas offline, envia elas primeiro ou junto
+                    const promessas = [];
+
+                    if (ucsNovasLocais.length > 0) {
+                        ucsNovasLocais.forEach(ucNova => {
+                            promessas.push(
+                                fetch(`${API_BASE}/ucs/registrar`, {
+                                    method: 'POST',
+                                    headers: { 'Content-Type': 'application/json' },
+                                    body: JSON.stringify({ uc: ucNova.uc, material: ucNova.material, peso_liquido: ucNova.peso_liquido })
+                                }).then(res => {
+                                    if (res.ok) {
+                                        // Remove a flag novaUC do banco local após sincronizar
+                                        const txWrite = db.transaction(['ucs_locais'], 'readwrite');
+                                        txWrite.objectStore('ucs_locais').put({ uc: ucNova.uc, material: ucNova.material, peso_liquido: ucNova.peso_liquido, novaUC: false });
+                                    }
+                                })
+                            );
+                        });
                     }
-                    marcarComoSincronizado(dadosPendentes);
-                })
-                .catch(error => {
-                    if (!silencioso) {
-                        mostrarAlerta("Erro", "Ocorreu um bloqueio ao enviar para o Python: " + error.message);
-                    }
-                    console.error(error);
-                });
+
+                    Promise.all(promessas).then(() => {
+                        if (dadosPendentes.length === 0) {
+                            if (!silencioso) mostrarAlerta("Sucesso", "Sincronização concluída com sucesso!");
+                            return;
+                        }
+
+                        return fetch(`${API_BASE}/sincronizar`, {
+                            method: 'POST',
+                            headers: { 'Content-Type': 'application/json' },
+                            body: JSON.stringify(dadosPendentes)
+                        })
+                        .then(async response => {
+                            if (!response.ok) {
+                                const err = await response.json().catch(() => ({}));
+                                throw new Error(err.erro || "Falha " + response.status);
+                            }
+                            return response.json();
+                        })
+                        .then(data => {
+                            if (!silencioso) {
+                                mostrarAlerta("Sucesso", `Sincronização concluída! ${data.inseridos} registros descarregados.`);
+                            }
+                            marcarComoSincronizado(dadosPendentes);
+                        });
+                    }).catch(error => {
+                        if (!silencioso) {
+                            mostrarAlerta("Erro", "Ocorreu um bloqueio ao sincronizar: " + error.message);
+                        }
+                        console.error(error);
+                    });
+                };
             };
         }
 
