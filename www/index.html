@@ -30,10 +30,24 @@
         
         button { width: 100%; padding: 10px; font-size: 14px; font-weight: bold; color: white; background-color: #0078D4; border: none; border-radius: 8px; cursor: pointer; flex-shrink: 0; }
         button:active { background-color: #005a9e; }
+        button:disabled { background-color: #a9c6e0; cursor: not-allowed; }
         .btn-secondary { background-color: #e3e7ec; color: #333; margin-top: 6px; }
         .btn-danger { background-color: #c62828; margin-top: 6px; margin-bottom: 4px; }
         
         .active-position { background-color: #eef6ff; border-left: 4px solid #0078D4; padding: 6px 10px; border-radius: 4px; margin-bottom: 6px; font-size: 14px; font-weight: bold; flex-shrink: 0; }
+
+        .status-base {
+            font-size: 12px;
+            text-align: center;
+            padding: 6px 8px;
+            border-radius: 6px;
+            margin-bottom: 8px;
+            flex-shrink: 0;
+            font-weight: 600;
+        }
+        .status-base.offline { background-color: #fff3cd; color: #7a5b00; }
+        .status-base.vazio { background-color: #fdecea; color: #c62828; }
+        .status-base.ok { background-color: #e8f5e9; color: #2e7d32; }
         
         .list-container { flex: 1 1 auto; overflow-y: auto; background: #fff; border-radius: 8px; border: 1px solid #e3e7ec; margin-top: 4px; margin-bottom: 4px; min-height: 0; }
         .list-item { display: flex; padding: 8px 12px; border-bottom: 1px solid #eee; font-size: 13px; }
@@ -69,14 +83,16 @@
             <label>Nome do Operador</label>
             <input type="text" id="login-nome" placeholder="Digite seu nome">
         </div>
-        <button onclick="entrarNaContagem()">Entrar na Contagem</button>
+        <button id="btn-entrar" onclick="entrarNaContagem()">Entrar na Contagem</button>
         <button id="btn-cadastrar-login" class="btn-secondary" onclick="registrarUsuario()" style="display: none;">Cadastrar Usuário</button>
         <button class="btn-secondary" onclick="sincronizarComServidor()">Sincronizar Dados</button>
     </div>
 
     <!-- TELA DE CONTAGEM -->
     <div id="screen-contagem" class="container screen">
-        
+
+        <div id="status-base-ucs" class="status-base" style="display: none;"></div>
+
         <div id="bloco-posicao" style="display: block;">
             <div class="form-group">
                 <label>Bipar ou Digitar Posição</label>
@@ -181,26 +197,31 @@
         }
 
         let db;
+        let dbReadyPromise;
         const requestDB = indexedDB.open("BipagemOfflineDB", 2);
 
-        requestDB.onupgradeneeded = function(event) {
-            db = event.target.result;
-            if (!db.objectStoreNames.contains('leituras')) {
-                db.createObjectStore('leituras', { keyPath: 'id', autoIncrement: true });
-            }
-            if (!db.objectStoreNames.contains('ucs_locais')) {
-                db.createObjectStore('ucs_locais', { keyPath: 'uc' });
-            }
-        };
+        dbReadyPromise = new Promise((resolve, reject) => {
+            requestDB.onupgradeneeded = function(event) {
+                db = event.target.result;
+                if (!db.objectStoreNames.contains('leituras')) {
+                    db.createObjectStore('leituras', { keyPath: 'id', autoIncrement: true });
+                }
+                if (!db.objectStoreNames.contains('ucs_locais')) {
+                    db.createObjectStore('ucs_locais', { keyPath: 'uc' });
+                }
+            };
 
-        requestDB.onsuccess = function(event) {
-            db = event.target.result;
-            carregarFilaMemoria(); 
-        };
+            requestDB.onsuccess = function(event) {
+                db = event.target.result;
+                carregarFilaMemoria();
+                resolve(db);
+            };
 
-        requestDB.onerror = function(event) {
-            console.error("Erro ao abrir IndexedDB:", event.target.errorCode);
-        };
+            requestDB.onerror = function(event) {
+                console.error("Erro ao abrir IndexedDB:", event.target.errorCode);
+                reject(event.target.error);
+            };
+        });
 
         if ('serviceWorker' in navigator) {
             window.addEventListener('load', () => {
@@ -239,6 +260,42 @@
             };
         }
 
+        // Conta quantas UCs existem na base local (ucs_locais) e atualiza o aviso
+        // exibido na tela de contagem. Isso torna visível para o operador se a
+        // base está vazia (nunca sincronizada) ou desatualizada (offline agora).
+        function contarUcsLocais() {
+            return new Promise((resolve) => {
+                if (!db) { resolve(0); return; }
+                const tx = db.transaction(['ucs_locais'], 'readonly');
+                const store = tx.objectStore('ucs_locais');
+                const req = store.count();
+                req.onsuccess = () => resolve(req.result || 0);
+                req.onerror = () => resolve(0);
+            });
+        }
+
+        async function atualizarStatusBaseUcs() {
+            const statusEl = document.getElementById('status-base-ucs');
+            const totalUcs = await contarUcsLocais();
+
+            if (!navigator.onLine) {
+                statusEl.style.display = 'block';
+                if (totalUcs === 0) {
+                    statusEl.className = 'status-base vazio';
+                    statusEl.innerText = 'Offline e sem base de UCs salva. Toda UC bipada será tratada como nova.';
+                } else {
+                    statusEl.className = 'status-base offline';
+                    statusEl.innerText = `Modo offline: usando base local com ${totalUcs} UC(s) salva(s) no dispositivo.`;
+                }
+            } else if (totalUcs === 0) {
+                statusEl.style.display = 'block';
+                statusEl.className = 'status-base vazio';
+                statusEl.innerText = 'Base de UCs local vazia. Sincronize antes de iniciar a contagem.';
+            } else {
+                statusEl.style.display = 'none';
+            }
+        }
+
         function mostrarBotaoCadastro(mostrar) {
             const botao = document.getElementById('btn-cadastrar-login');
             botao.style.display = mostrar ? 'block' : 'none';
@@ -272,6 +329,26 @@
             });
         }
 
+        // Salva a lista de UCs recebida do servidor no IndexedDB e só resolve
+        // a Promise quando a transação realmente terminar (tx.oncomplete).
+        // Isso evita liberar a bipagem antes da base local estar pronta.
+        function salvarUcsLocais(listaUcs) {
+            return new Promise((resolve, reject) => {
+                if (!db || !listaUcs || listaUcs.length === 0) {
+                    resolve();
+                    return;
+                }
+                const tx = db.transaction(['ucs_locais'], 'readwrite');
+                const store = tx.objectStore('ucs_locais');
+                listaUcs.forEach(item => {
+                    store.put({ uc: item.uc, material: item.material || '', peso_liquido: item.peso_liquido || 0 });
+                });
+                tx.oncomplete = () => resolve();
+                tx.onerror = () => reject(tx.error);
+                tx.onabort = () => reject(tx.error);
+            });
+        }
+
         function entrarNaContagem() {
             const matricula = document.getElementById('login-matricula').value.trim();
             const nome = document.getElementById('login-nome').value.trim();
@@ -281,6 +358,16 @@
                 mostrarAlerta("Atenção", "Preencha o documento, a matrícula e o nome!");
                 return;
             }
+
+            const btnEntrar = document.getElementById('btn-entrar');
+            btnEntrar.disabled = true;
+            const textoOriginalBtn = btnEntrar.innerText;
+            btnEntrar.innerText = "Entrando...";
+
+            const restaurarBotao = () => {
+                btnEntrar.disabled = false;
+                btnEntrar.innerText = textoOriginalBtn;
+            };
 
             fetchJson(`${API_BASE}/documentos/validar/${encodeURIComponent(documento)}`)
                 .then(resultado => {
@@ -301,29 +388,42 @@
                     mostrarBotaoCadastro(false);
                     const nomeDoUsuario = data.nome || nome;
                     operadorLogado = { matricula, nome: nomeDoUsuario };
-                    
-                    if (navigator.onLine) {
-                        fetchJson(`${API_BASE}/ucs`)
-                            .then(res => {
-                                if (res && res.ucs && db) {
-                                    const tx = db.transaction(['ucs_locais'], 'readwrite');
-                                    const store = tx.objectStore('ucs_locais');
-                                    res.ucs.forEach(item => {
-                                        store.put({ uc: item.uc, material: item.material || '', peso_liquido: item.peso_liquido || 0 });
-                                    });
-                                }
-                            }).catch(e => console.log("Aviso ao baixar UCs locais:", e));
-                    }
-                    
-                    document.getElementById('screen-login').classList.remove('active');
-                    document.getElementById('screen-contagem').classList.add('active');
-                    
-                    mostrarAlerta("Sucesso", `Documento validado! ${posicoesAutorizadas.length} posições liberadas para contagem.`, () => {
-                        document.getElementById('input-posicao').focus();
+
+                    const prosseguirParaContagem = async (avisoExtra = "") => {
+                        await atualizarStatusBaseUcs();
+
+                        document.getElementById('screen-login').classList.remove('active');
+                        document.getElementById('screen-contagem').classList.add('active');
+
+                        mostrarAlerta("Sucesso", `Documento validado! ${posicoesAutorizadas.length} posições liberadas para contagem.${avisoExtra}`, () => {
+                            document.getElementById('input-posicao').focus();
+                        });
+                    };
+
+                    // Garante que o IndexedDB já está aberto antes de tentar gravar nele.
+                    return dbReadyPromise.then(() => {
+                        if (navigator.onLine) {
+                            return fetchJson(`${API_BASE}/ucs`)
+                                .then(res => salvarUcsLocais(res && res.ucs))
+                                .then(() => prosseguirParaContagem())
+                                .catch(e => {
+                                    console.log("Aviso ao baixar UCs locais:", e);
+                                    return prosseguirParaContagem(
+                                        "\n\nAtenção: não foi possível atualizar a base de UCs agora. Será usada a última base salva no dispositivo."
+                                    );
+                                });
+                        } else {
+                            return prosseguirParaContagem(
+                                "\n\nModo offline: usando a base de UCs salva anteriormente no dispositivo."
+                            );
+                        }
                     });
                 })
                 .catch(error => {
                     mostrarAlerta("Erro", error.message || 'Erro ao tentar entrar. Verifique os dados ou a conexão.');
+                })
+                .finally(() => {
+                    restaurarBotao();
                 });
         }
 
@@ -497,6 +597,7 @@
             if (db) {
                 const tx = db.transaction(['ucs_locais'], 'readwrite');
                 tx.objectStore('ucs_locais').put({ uc: ucEmCadastro, material, peso_liquido: Number(peso), novaUC: true });
+                tx.oncomplete = () => { atualizarStatusBaseUcs(); };
             }
 
             document.getElementById('modal-uc-inexistente').classList.remove('active');
@@ -602,6 +703,7 @@
             atualizarContadorUC();
             document.getElementById('lista-ucs').innerHTML = "";
             document.querySelector('#display-posicao span').innerText = "";
+            document.getElementById('status-base-ucs').style.display = 'none';
 
             document.getElementById('screen-contagem').classList.remove('active');
             document.getElementById('screen-login').classList.add('active');
@@ -655,6 +757,7 @@
                     Promise.all(promessas).then(() => {
                         if (dadosPendentes.length === 0) {
                             if (!silencioso) mostrarAlerta("Sucesso", "Sincronização concluída com sucesso!");
+                            atualizarStatusBaseUcs();
                             return;
                         }
 
@@ -675,6 +778,7 @@
                                 mostrarAlerta("Sucesso", `Sincronização concluída! ${data.inseridos} registros descarregados.`);
                             }
                             marcarComoSincronizado(dadosPendentes);
+                            atualizarStatusBaseUcs();
                         });
                     }).catch(error => {
                         if (!silencioso) {
@@ -703,6 +807,11 @@
         window.addEventListener('online', () => {
             console.log("Conexão de rede restabelecida! Tentando sincronizar automaticamente...");
             sincronizarComServidor(true);
+            atualizarStatusBaseUcs();
+        });
+
+        window.addEventListener('offline', () => {
+            atualizarStatusBaseUcs();
         });
 
         window.addEventListener('load', () => {
