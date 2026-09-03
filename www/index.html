@@ -465,7 +465,11 @@
             };
 
             request.onerror = function() {
-                mostrarAlerta("Erro", "Falha ao consultar a base de dados do celular.");
+                ucEmCadastro = ucVal;
+                document.getElementById('campo-material').value = '';
+                document.getElementById('campo-peso').value = '';
+                document.getElementById('modal-uc-inexistente').classList.add('active');
+                document.getElementById('campo-material').focus();
             };
         }
 
@@ -492,7 +496,6 @@
 
             if (db) {
                 const tx = db.transaction(['ucs_locais'], 'readwrite');
-                // Marcamos com flag novaUC = true para o sistema saber que precisa enviar esse cadastro ao servidor depois
                 tx.objectStore('ucs_locais').put({ uc: ucEmCadastro, material, peso_liquido: Number(peso), novaUC: true });
             }
 
@@ -611,14 +614,12 @@
         function sincronizarComServidor(silencioso = false) {
             const transaction = db.transaction(['leituras', 'ucs_locais'], 'readonly');
             
-            // Busca UCs novas cadastradas offline
             const storeUcs = transaction.objectStore('ucs_locais');
             const reqUcs = storeUcs.getAll();
 
             reqUcs.onsuccess = function(eUcs) {
                 const ucsNovasLocais = eUcs.target.result.filter(u => u.novaUC === true);
 
-                // Busca leituras pendentes
                 const storeLeituras = transaction.objectStore('leituras');
                 const reqLeituras = storeLeituras.getAll();
 
@@ -632,7 +633,6 @@
                         return;
                     }
 
-                    // Se houver UCs novas criadas offline, envia elas primeiro ou junto
                     const promessas = [];
 
                     if (ucsNovasLocais.length > 0) {
@@ -644,7 +644,6 @@
                                     body: JSON.stringify({ uc: ucNova.uc, material: ucNova.material, peso_liquido: ucNova.peso_liquido })
                                 }).then(res => {
                                     if (res.ok) {
-                                        // Remove a flag novaUC do banco local após sincronizar
                                         const txWrite = db.transaction(['ucs_locais'], 'readwrite');
                                         txWrite.objectStore('ucs_locais').put({ uc: ucNova.uc, material: ucNova.material, peso_liquido: ucNova.peso_liquido, novaUC: false });
                                     }
