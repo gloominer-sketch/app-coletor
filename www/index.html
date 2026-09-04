@@ -635,7 +635,8 @@
                 dataHora: new Date().toISOString(),
                 status: "Pendente",
                 material: dadosExtras.material || '',
-                peso_liquido: dadosExtras.peso_liquido ?? 0
+                peso_liquido: dadosExtras.peso_liquido ?? 0,
+                documento: documentoAtivo
             };
 
             const transaction = db.transaction(['leituras'], 'readwrite');
